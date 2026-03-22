@@ -471,33 +471,38 @@ class LiveTab(ctk.CTkFrame):
         self.lbl_race_elapsed = ctk.CTkLabel(cb, text="", font=FONT_MICRO, text_color=CLR_MUTED)
         self.lbl_race_elapsed.pack(pady=(0, 6))
 
-        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_container = ctk.CTkScrollableFrame(
+            self, fg_color="transparent", corner_radius=0)
         self.main_container.pack(fill="both", expand=True, padx=12, pady=8)
         self._build_columns()
 
     def _build_columns(self):
         for w in self.main_container.winfo_children():
             w.destroy()
+
+        # Les 3 colonnes côte à côte dans un frame horizontal scrollable verticalement
         cf = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        cf.pack(fill="both", expand=True)
-        cf.columnconfigure(0, weight=1); cf.columnconfigure(1, weight=1); cf.columnconfigure(2, weight=1)
+        cf.pack(fill="x", expand=False)
+        cf.columnconfigure(0, weight=1)
+        cf.columnconfigure(1, weight=1)
+        cf.columnconfigure(2, weight=1)
 
         self.col_velo1 = EntityColumn(
             cf, "🚴  VÉLO 1", CLR_ACCENT1, is_velo=True, velo_num=1,
             on_passage=self._passage_velo1, on_changement=self._changement_velo1,
             on_file=lambda: self._open_file(1), on_undo=lambda: self._undo("velo1"))
-        self.col_velo1.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.col_velo1.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=4)
 
         self.col_peloton = EntityColumn(
             cf, "🏁  PELOTON", CLR_PELOTON,
             on_passage=self._passage_peloton, on_undo=lambda: self._undo("peloton"))
-        self.col_peloton.grid(row=0, column=1, sticky="nsew", padx=3)
+        self.col_peloton.grid(row=0, column=1, sticky="nsew", padx=3, pady=4)
 
         self.col_velo2 = EntityColumn(
             cf, "🚴  VÉLO 2", CLR_ACCENT2, is_velo=True, velo_num=2,
             on_passage=self._passage_velo2, on_changement=self._changement_velo2,
             on_file=lambda: self._open_file(2), on_undo=lambda: self._undo("velo2"))
-        self.col_velo2.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        self.col_velo2.grid(row=0, column=2, sticky="nsew", padx=(6, 0), pady=4)
 
     def _open_file(self, velo_num):
         DialogFileAttente(self, velo_num,

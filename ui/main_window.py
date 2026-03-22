@@ -41,21 +41,27 @@ class SetupDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.on_start = on_start
         self.title("Configuration — Relai 24H")
-        self.geometry("560x870")
+        self.geometry("560x820")
+        self.minsize(540, 500)
         self.configure(fg_color=CLR_BG)
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.grab_set(); self.lift(); self.focus_force()
         self._build()
         self._load_current()
 
     def _build(self):
-        ctk.CTkLabel(self, text="⚡  CONFIGURATION DE LA COURSE",
+        # Scrollable wrapper — tout le contenu est scrollable sur petit écran
+        self._scroll = ctk.CTkScrollableFrame(self, fg_color=CLR_BG, corner_radius=0)
+        self._scroll.pack(fill="both", expand=True)
+        p = self._scroll
+
+        ctk.CTkLabel(p, text="⚡  CONFIGURATION DE LA COURSE",
                      font=FONT_TITLE, text_color=CLR_ACCENT).pack(pady=(20, 2))
-        ctk.CTkLabel(self, text="Paramètres et liste des rouleurs",
+        ctk.CTkLabel(p, text="Paramètres et liste des rouleurs",
                      font=FONT_MICRO, text_color=CLR_MUTED).pack(pady=(0, 14))
 
         # Preset
-        preset_f = ctk.CTkFrame(self, fg_color=CLR_CARD, corner_radius=8)
+        preset_f = ctk.CTkFrame(p, fg_color=CLR_CARD, corner_radius=8)
         preset_f.pack(fill="x", padx=24, pady=(0, 10))
         ctk.CTkLabel(preset_f, text="Preset", font=FONT_SMALL,
                      text_color=CLR_MUTED).pack(side="left", padx=12, pady=10)
@@ -67,10 +73,10 @@ class SetupDialog(ctk.CTkToplevel):
                           command=self._apply_preset
                           ).pack(side="right", padx=12, pady=8)
 
-        self._field_row("Nom de la course", "entry_name")
-        self._field_row("Distance par tour (km)", "entry_km")
+        self._field_row(p, "Nom de la course", "entry_name")
+        self._field_row(p, "Distance par tour (km)", "entry_km")
 
-        duree_f = ctk.CTkFrame(self, fg_color=CLR_CARD, corner_radius=8)
+        duree_f = ctk.CTkFrame(p, fg_color=CLR_CARD, corner_radius=8)
         duree_f.pack(fill="x", padx=24, pady=(0, 10))
         ctk.CTkLabel(duree_f, text="Durée de la course",
                      font=FONT_SMALL, text_color=CLR_TEXT).pack(side="left", padx=12, pady=10)
@@ -90,7 +96,7 @@ class SetupDialog(ctk.CTkToplevel):
                      text_color=CLR_MUTED).pack(side="left", padx=4)
 
         # Rouleurs
-        roul_hdr = ctk.CTkFrame(self, fg_color="transparent")
+        roul_hdr = ctk.CTkFrame(p, fg_color="transparent")
         roul_hdr.pack(fill="x", padx=24, pady=(10, 2))
         ctk.CTkLabel(roul_hdr, text="👥  ROULEURS",
                      font=("Consolas", 12, "bold"), text_color=CLR_TEXT).pack(side="left")
@@ -99,7 +105,7 @@ class SetupDialog(ctk.CTkToplevel):
                       text_color=CLR_ACCENT, font=FONT_MICRO, height=28, width=130,
                       command=self._import_csv).pack(side="right")
 
-        add_f = ctk.CTkFrame(self, fg_color=CLR_CARD, corner_radius=8)
+        add_f = ctk.CTkFrame(p, fg_color=CLR_CARD, corner_radius=8)
         add_f.pack(fill="x", padx=24, pady=(0, 4))
         self.entry_rouleur = ctk.CTkEntry(add_f, placeholder_text="Prénom Nom",
                                           fg_color=CLR_BG, border_color=CLR_BORDER,
@@ -110,7 +116,7 @@ class SetupDialog(ctk.CTkToplevel):
                       text_color=CLR_ACCENT, font=FONT_SMALL, height=30, width=100,
                       command=self._add_rouleur).pack(side="left")
 
-        self.rouleur_scroll = ctk.CTkScrollableFrame(self, fg_color=CLR_CARD,
+        self.rouleur_scroll = ctk.CTkScrollableFrame(p, fg_color=CLR_CARD,
                                                      corner_radius=8, height=110)
         self.rouleur_scroll.pack(fill="x", padx=24, pady=(0, 14))
         self.lbl_rouleurs_list = ctk.CTkLabel(self.rouleur_scroll, text="",
@@ -119,11 +125,11 @@ class SetupDialog(ctk.CTkToplevel):
         self.lbl_rouleurs_list.pack(anchor="w", padx=8, pady=6)
 
         # ── Rouleurs de départ ──
-        ctk.CTkLabel(self, text="🚦  ROULEURS DE DÉPART  (obligatoire)",
+        ctk.CTkLabel(p, text="🚦  ROULEURS DE DÉPART  (obligatoire)",
                      font=("Consolas", 12, "bold"), text_color="#f59e0b"
                      ).pack(anchor="w", padx=24, pady=(8, 2))
 
-        depart_f = ctk.CTkFrame(self, fg_color=CLR_CARD, corner_radius=8)
+        depart_f = ctk.CTkFrame(p, fg_color=CLR_CARD, corner_radius=8)
         depart_f.pack(fill="x", padx=24, pady=(0, 14))
         depart_f.columnconfigure(0, weight=1)
         depart_f.columnconfigure(1, weight=1)
@@ -148,21 +154,21 @@ class SetupDialog(ctk.CTkToplevel):
             menu.pack(fill="x", pady=(4, 0))
             setattr(self, attr, menu)
 
-        ctk.CTkButton(self, text="▶  DÉMARRER LA COURSE",
+        ctk.CTkButton(p, text="▶  DÉMARRER LA COURSE",
                       fg_color=CLR_GOOD, hover_color="#16a34a",
                       text_color="#000", font=FONT_BTN, height=50,
                       command=self._start).pack(fill="x", padx=24, pady=(0, 4))
-        ctk.CTkButton(self, text="▷  Continuer (course déjà démarrée)",
+        ctk.CTkButton(p, text="▷  Continuer (course déjà démarrée)",
                       fg_color=CLR_CARD, border_color=CLR_ACCENT, border_width=1,
                       text_color=CLR_ACCENT, font=FONT_SMALL, height=36,
                       command=self._continue).pack(fill="x", padx=24, pady=(0, 4))
-        ctk.CTkButton(self, text="⚠  Réinitialiser la course",
+        ctk.CTkButton(p, text="⚠  Réinitialiser la course",
                       fg_color="transparent", border_color=CLR_BAD, border_width=1,
                       text_color=CLR_BAD, font=FONT_SMALL, height=32,
                       command=self._reset).pack(fill="x", padx=24, pady=(0, 12))
 
-    def _field_row(self, label, attr):
-        f = ctk.CTkFrame(self, fg_color=CLR_CARD, corner_radius=8)
+    def _field_row(self, parent, label, attr):
+        f = ctk.CTkFrame(parent, fg_color=CLR_CARD, corner_radius=8)
         f.pack(fill="x", padx=24, pady=(0, 10))
         ctk.CTkLabel(f, text=label, font=FONT_SMALL, text_color=CLR_TEXT
                      ).pack(side="left", padx=12, pady=10)
