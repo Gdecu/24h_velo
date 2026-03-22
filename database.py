@@ -5,7 +5,7 @@ import csv
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "race.db")
 
 DEFAULT_KM    = "2.62"
-DEFAULT_DUREE = "86400"   # 24h en secondes
+DEFAULT_DUREE = "86400"
 
 
 def get_connection():
@@ -19,7 +19,6 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
 
-    # Rouleurs partagés entre les deux vélos
     c.execute("""
         CREATE TABLE IF NOT EXISTS rouleurs (
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +46,27 @@ def init_db():
         )
     """)
 
+    # File d'attente : position ordonnée par velo
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS file_attente (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            velo       INTEGER NOT NULL,
+            rouleur_id INTEGER NOT NULL,
+            position   INTEGER NOT NULL,
+            FOREIGN KEY(rouleur_id) REFERENCES rouleurs(id)
+        )
+    """)
+
+    # Offset de tours par vélo (ajusté automatiquement quand écart > 3min)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS tour_offset (
+            velo    INTEGER PRIMARY KEY,
+            offset  INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO tour_offset VALUES (1, 0)")
+    c.execute("INSERT OR IGNORE INTO tour_offset VALUES (2, 0)")
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS config (
             cle    TEXT PRIMARY KEY,
@@ -55,10 +75,12 @@ def init_db():
     """)
 
     defaults = {
-        "km_par_tour": DEFAULT_KM,
-        "race_start":  "",
-        "race_duree":  DEFAULT_DUREE,
-        "race_name":   "24h Vélo du Bois de la Cambre",
+        "km_par_tour":       DEFAULT_KM,
+        "race_start":        "",
+        "race_duree":        DEFAULT_DUREE,
+        "race_name":         "24h Vélo du Bois de la Cambre",
+        "depart_rouleur_v1": "",
+        "depart_rouleur_v2": "",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO config VALUES (?,?)", (k, v))
@@ -66,6 +88,8 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+# ── Config ────────────────────────────────────────────────────────────────────
 
 def get_config(cle):
     conn = get_connection()
@@ -80,6 +104,8 @@ def set_config(cle, valeur):
     conn.commit()
     conn.close()
 
+
+# ── Passages ──────────────────────────────────────────────────────────────────
 
 def save_passage(entite, timestamp, type_event="passage"):
     conn = get_connection()
@@ -113,6 +139,8 @@ def delete_last_passage(entite):
     conn.close()
 
 
+# ── Rouleurs ──────────────────────────────────────────────────────────────────
+
 def save_rouleur(nom):
     conn = get_connection()
     try:
@@ -140,13 +168,7 @@ def get_rouleur_by_id(rouleur_id):
 
 
 def import_rouleurs_csv(filepath):
-    """
-    Importe les rouleurs depuis un CSV.
-    Gère les fichiers à une seule colonne (sans délimiteur détectable),
-    avec ou sans en-tête 'nom', encodage UTF-8 ou Latin-1.
-    """
     count = 0
-    # Essayer d'abord UTF-8, puis Latin-1 en fallback
     for encoding in ('utf-8-sig', 'utf-8', 'latin-1'):
         try:
             with open(filepath, newline='', encoding=encoding) as f:
@@ -155,22 +177,18 @@ def import_rouleurs_csv(filepath):
         except UnicodeDecodeError:
             continue
     else:
-        print("[import_csv] Impossible de décoder le fichier.")
         return 0
-
-    # Sauter la ligne d'en-tête si elle vaut exactement 'nom' (insensible à la casse)
     if lines and lines[0].strip().lower() == 'nom':
         lines = lines[1:]
-
     for line in lines:
-        # Prendre la première colonne si séparateur présent, sinon toute la ligne
         nom = line.split(',')[0].split(';')[0].strip()
         if nom:
             save_rouleur(nom)
             count += 1
-
     return count
 
+
+# ── Changements ───────────────────────────────────────────────────────────────
 
 def save_changement(velo, rouleur_sortant_id, rouleur_entrant_id, timestamp):
     conn = get_connection()
@@ -198,10 +216,140 @@ def get_changements(velo):
     return [dict(r) for r in rows]
 
 
+# ── File d'attente ────────────────────────────────────────────────────────────
+
+def get_file_attente(velo):
+    """Retourne la file dans l'ordre de position."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT f.id, f.position, f.velo, r.id as rouleur_id, r.nom
+        FROM file_attente f
+        JOIN rouleurs r ON f.rouleur_id = r.id
+        WHERE f.velo=?
+        ORDER BY f.position ASC
+    """, (velo,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_to_file(velo, rouleur_id):
+    """Ajoute un rouleur en fin de file."""
+    conn = get_connection()
+    max_pos = conn.execute(
+        "SELECT MAX(position) as m FROM file_attente WHERE velo=?", (velo,)
+    ).fetchone()["m"] or 0
+    conn.execute(
+        "INSERT INTO file_attente (velo, rouleur_id, position) VALUES (?,?,?)",
+        (velo, rouleur_id, max_pos + 1)
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_from_file(file_id):
+    """Supprime un rouleur de la file par son id de ligne."""
+    conn = get_connection()
+    conn.execute("DELETE FROM file_attente WHERE id=?", (file_id,))
+    conn.commit()
+    conn.close()
+
+
+def pop_file_attente(velo):
+    """Retire et retourne le 1er rouleur de la file (prochain à rouler)."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM file_attente WHERE velo=? ORDER BY position ASC LIMIT 1",
+        (velo,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM file_attente WHERE id=?", (row["id"],))
+        conn.commit()
+        r = get_rouleur_by_id(row["rouleur_id"])
+        conn.close()
+        return r["nom"] if r else None
+    conn.close()
+    return None
+
+
+def move_file_entry(file_id, direction, velo):
+    """Monte (direction=-1) ou descend (direction=+1) un élément dans la file."""
+    conn = get_connection()
+    entries = conn.execute(
+        "SELECT id, position FROM file_attente WHERE velo=? ORDER BY position ASC",
+        (velo,)
+    ).fetchall()
+    entries = [dict(e) for e in entries]
+    idx = next((i for i, e in enumerate(entries) if e["id"] == file_id), None)
+    if idx is None:
+        conn.close()
+        return
+    swap_idx = idx + direction
+    if 0 <= swap_idx < len(entries):
+        p1 = entries[idx]["position"]
+        p2 = entries[swap_idx]["position"]
+        conn.execute("UPDATE file_attente SET position=? WHERE id=?", (p2, entries[idx]["id"]))
+        conn.execute("UPDATE file_attente SET position=? WHERE id=?", (p1, entries[swap_idx]["id"]))
+        conn.commit()
+    conn.close()
+
+
+# ── Tour offset (pour le calcul d'écart) ─────────────────────────────────────
+
+def get_tour_offset(velo):
+    conn = get_connection()
+    row = conn.execute("SELECT offset FROM tour_offset WHERE velo=?", (velo,)).fetchone()
+    conn.close()
+    return row["offset"] if row else 0
+
+
+def set_tour_offset(velo, offset):
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO tour_offset VALUES (?,?)", (velo, offset))
+    conn.commit()
+    conn.close()
+
+
+# ── Reset ─────────────────────────────────────────────────────────────────────
+
 def reset_all():
     conn = get_connection()
     conn.execute("DELETE FROM passages")
     conn.execute("DELETE FROM changements")
+    conn.execute("DELETE FROM file_attente")
+    conn.execute("UPDATE tour_offset SET offset=0")
     conn.execute("UPDATE config SET valeur='' WHERE cle='race_start'")
+    conn.execute("UPDATE config SET valeur='' WHERE cle='depart_rouleur_v1'")
+    conn.execute("UPDATE config SET valeur='' WHERE cle='depart_rouleur_v2'")
     conn.commit()
     conn.close()
+
+
+# ── Export CSV ────────────────────────────────────────────────────────────────
+
+def export_historique_csv(velo_state, velo_num, output_dir):
+    """
+    Exporte l'historique complet d'un vélo en CSV.
+    Retourne le chemin du fichier créé.
+    """
+    from models import format_duration, format_speed, KM_PAR_TOUR, reload_km
+    reload_km()
+
+    filename = os.path.join(output_dir, f"historique_velo{velo_num}.csv")
+    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f, delimiter=";")
+        writer.writerow(["Tour #", "Type", "Durée", "Vitesse (km/h)", "Km cumulé", "Rouleur"])
+        km_cumul = 0.0
+        for i, t in enumerate(velo_state.tour_times):
+            rouleur = velo_state.get_rouleur_at_time(velo_state.timestamps[i]) or "?"
+            type_tour = "Départ" if i == 0 else "Course"
+            km_cumul += KM_PAR_TOUR
+            spd = KM_PAR_TOUR / (t / 3600) if t > 0 else 0
+            writer.writerow([
+                i + 1,
+                type_tour,
+                format_duration(t),
+                f"{spd:.2f}",
+                f"{km_cumul:.2f}",
+                rouleur
+            ])
+    return filename

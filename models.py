@@ -28,26 +28,22 @@ def format_duration(seconds):
 
 def format_speed(km, seconds):
     if seconds and seconds > 0:
-        speed = km / (seconds / 3600)
-        return f"{speed:.1f} km/h"
+        return f"{km / (seconds / 3600):.1f} km/h"
     return "--"
 
 
 def is_race_finished():
-    """Retourne True si la course est terminée (temps écoulé)."""
     start_str = get_config("race_start")
     duree_str = get_config("race_duree")
     if not start_str or not duree_str:
         return False
     try:
-        elapsed = time.time() - float(start_str)
-        return elapsed >= float(duree_str)
+        return time.time() - float(start_str) >= float(duree_str)
     except Exception:
         return False
 
 
 def is_race_started():
-    """Retourne True si la course a démarré."""
     start_str = get_config("race_start")
     return bool(start_str and start_str.strip())
 
@@ -56,7 +52,7 @@ class EntityState:
     def __init__(self, entite_key):
         self.entite_key = entite_key
         self.timestamps = []
-        self.tour_times = []   # durée de chaque tour, index 0 = tour #1 (départ)
+        self.tour_times = []
 
     def load_from_db(self):
         passages = get_passages(self.entite_key)
@@ -83,13 +79,10 @@ class EntityState:
 
     @property
     def dernier_tour(self):
-        if self.tour_times:
-            return self.tour_times[-1]
-        return None
+        return self.tour_times[-1] if self.tour_times else None
 
     @property
     def derniers_tours(self):
-        """5 derniers tours (du plus récent au plus ancien), avec numéro."""
         tours = self.tour_times
         if not tours:
             return []
@@ -97,38 +90,33 @@ class EntityState:
         total = len(tours)
         for i, t in enumerate(reversed(tours[-5:])):
             num = total - i
-            is_depart = (total - i) == 1
-            result.append({"num": num, "time": t, "is_depart": is_depart})
+            result.append({"num": num, "time": t, "is_depart": num == 1})
         return result
 
     @property
     def tour_times_ranked(self):
-        """Tours sans le 1er pour les classements."""
-        if len(self.tour_times) <= 1:
-            return []
-        return self.tour_times[1:]
+        return self.tour_times[1:] if len(self.tour_times) > 1 else []
 
     @property
     def meilleurs_tours(self):
-        """Top 5 sans le 1er tour (départ)."""
         return sorted(self.tour_times_ranked)[:5]
 
     @property
     def temps_depuis_dernier_passage(self):
         if not self.timestamps:
             return None
-        if is_race_finished() and self.timestamps:
-            # Course terminée : on fige le dernier chrono affiché
-            end_ts = float(get_config("race_start")) + float(get_config("race_duree"))
-            return end_ts - self.timestamps[-1]
+        if is_race_finished():
+            try:
+                end_ts = float(get_config("race_start")) + float(get_config("race_duree"))
+                return end_ts - self.timestamps[-1]
+            except Exception:
+                pass
         return time.time() - self.timestamps[-1]
 
     @property
     def vitesse_dernier_tour(self):
         t = self.dernier_tour
-        if t:
-            return format_speed(KM_PAR_TOUR, t)
-        return "--"
+        return format_speed(KM_PAR_TOUR, t) if t else "--"
 
     @property
     def vitesse_moyenne(self):
@@ -138,8 +126,7 @@ class EntityState:
         return "--"
 
     def get_tour_at_time(self, ts):
-        count = sum(1 for t in self.timestamps if t <= ts)
-        return max(0, count - 1)
+        return max(0, sum(1 for t in self.timestamps if t <= ts) - 1)
 
 
 class VeloState(EntityState):
@@ -180,11 +167,6 @@ class VeloState(EntityState):
         return rouleur
 
     def get_stats_par_rouleur(self):
-        """
-        Retourne {nom: {...}}.
-        Le tour #1 (départ) est inclus dans km/tours mais exclu du meilleur_tour
-        et de tours_ranked (classements).
-        """
         stats = {}
         for i, tour_time in enumerate(self.tour_times):
             ts_debut = self.timestamps[i]
@@ -200,8 +182,6 @@ class VeloState(EntityState):
             stats[rouleur]["km"] += KM_PAR_TOUR
             stats[rouleur]["temps_total"] += tour_time
             stats[rouleur]["tous_les_tours"].append((tour_time, is_depart))
-
-            # Exclure le tour de départ des classements
             if not is_depart:
                 stats[rouleur]["tours_ranked"].append(tour_time)
                 cur = stats[rouleur]["meilleur_tour"]
@@ -212,48 +192,16 @@ class VeloState(EntityState):
 
 class RetardCalculator:
     """
-    Calcule l'ecart entre un velo et le peloton.
+    Ecart = T_velo_dernier_passage - T_peloton_dernier_passage
 
-    Convention de signe :
-      ecart > 0  => velo DERRIERE le peloton  (retard)  => rouge/orange
-      ecart < 0  => velo DEVANT  le peloton  (avance)  => vert
+      > 0  => velo passe APRES le peloton => velo en RETARD  => rouge/orange
+      < 0  => velo passe AVANT le peloton => velo en AVANCE  => vert
 
-    Regle d'affichage (visuelle uniquement, compteurs inchanges) :
-      Si |ecart| < 60s => approx_meme_tour=True => affichage "~ meme tour"
-
-    Calcul :
-      N = min(tours_peloton, tours_velo)
-      ecart_brut = timestamps_peloton[N] - timestamps_velo[N]
-        positif = peloton passe APRES velo au tour N = velo etait devant
-      retard = -ecart_brut   (positif = velo derriere)
+    Affichage uniquement en secondes, pas de compteur de tours.
     """
 
-    SEUIL_MEME_TOUR = 60
-
-    def compute(self, peloton, velo):
-        """
-        Retourne (ecart_secondes, ecart_tours, approx_meme_tour).
-          ecart_secondes   : positif=retard, negatif=avance, None si pas calculable
-          ecart_tours      : positif=tours de retard, negatif=tours d'avance
-          approx_meme_tour : True si |ecart| < 60s
-        """
+    def compute(self, peloton: EntityState, velo: EntityState, velo_num: int = 0):
+        """Retourne ecart_sec (float|None). Positif=retard, negatif=avance."""
         if not peloton.timestamps or not velo.timestamps:
-            return None, 0, False
-
-        tours_p = peloton.nb_tours
-        tours_v = velo.nb_tours
-        ecart_tours = tours_p - tours_v
-
-        N = min(tours_p, tours_v)
-        if N == 0:
-            return None, ecart_tours, False
-
-        ts_p = peloton.timestamps[N]
-        ts_v = velo.timestamps[N]
-
-        ecart_brut = ts_p - ts_v        # positif = peloton arrive apres velo = velo devant
-        ecart_secondes = -ecart_brut    # positif = retard velo
-
-        approx_meme_tour = abs(ecart_secondes) < self.SEUIL_MEME_TOUR
-
-        return ecart_secondes, ecart_tours, approx_meme_tour
+            return None
+        return velo.timestamps[-1] - peloton.timestamps[-1]
